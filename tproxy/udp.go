@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 	"net"
+	"os"
 	"strconv"
 	"syscall"
 	"unsafe"
@@ -37,6 +40,21 @@ func ReadFromUDP(conn *net.UDPConn, b []byte) (int, *net.UDPAddr, *net.UDPAddr, 
 		return 0, nil, nil, fmt.Errorf("parsing socket control message: %s", err)
 	}
 	return n, addr, origDst, nil
+}
+
+func parseOrigFromOOB(oob []byte) net.IP {
+	// Start with IPv6 and then fallback to IPv4
+	// TODO(fastest963): Figure out a way to prefer one or the other. Looking at
+	// the lvl of the header for a 0 or 41 isn't cross-platform.
+	cm6 := new(ipv6.ControlMessage)
+	if cm6.Parse(oob) == nil && cm6.Dst != nil {
+		return cm6.Src
+	}
+	cm4 := new(ipv4.ControlMessage)
+	if cm4.Parse(oob) == nil && cm4.Dst != nil {
+		return cm4.Src
+	}
+	return nil
 }
 
 func readOrigAddrFromOOB(oob []byte) (*net.UDPAddr, error) {
@@ -79,4 +97,114 @@ func readOrigAddrFromOOB(oob []byte) (*net.UDPAddr, error) {
 		return nil, fmt.Errorf("unable to obtain original destination: %s", err)
 	}
 	return origAddr, nil
+}
+
+func CorrectSource(src net.IP) []byte {
+	//dst := parseDstFromOOB(oob)
+	//if dst == nil {
+	//	return nil
+	//}
+	// If the dst is definitely an IPv6, then use ipv6's ControlMessage to
+	// respond otherwise use ipv4's because ipv6's marshal ignores ipv4
+	// addresses.
+	if src.To4() == nil {
+		cm := new(ipv6.ControlMessage)
+		cm.Src = src
+		return cm.Marshal()
+	} else {
+		cm := new(ipv4.ControlMessage)
+		cm.Src = src
+		return cm.Marshal()
+	}
+	//return oob
+}
+
+func DialUDP(network string, laddr *net.UDPAddr, raddr *net.UDPAddr) (*net.UDPConn, error) {
+	remoteSocketAddress, err := udpAddrToSocketAddr(raddr)
+	if err != nil {
+		return nil, &net.OpError{Op: "dial", Err: fmt.Errorf("build destination socket address: %s", err)}
+	}
+
+	localSocketAddress, err := udpAddrToSocketAddr(laddr)
+	if err != nil {
+		return nil, &net.OpError{Op: "dial", Err: fmt.Errorf("build local socket address: %s", err)}
+	}
+
+	fileDescriptor, err := syscall.Socket(udpAddrFamily(network, laddr, raddr), syscall.SOCK_DGRAM, 0)
+	if err != nil {
+		return nil, &net.OpError{Op: "dial", Err: fmt.Errorf("socket open: %s", err)}
+	}
+
+	if err = syscall.SetsockoptInt(fileDescriptor, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1); err != nil {
+		syscall.Close(fileDescriptor)
+		return nil, &net.OpError{Op: "dial", Err: fmt.Errorf("set socket option: SO_REUSEADDR: %s", err)}
+	}
+
+	if err = syscall.SetsockoptInt(fileDescriptor, syscall.SOL_IP, syscall.IP_TRANSPARENT, 1); err != nil {
+		syscall.Close(fileDescriptor)
+		return nil, &net.OpError{Op: "dial", Err: fmt.Errorf("set socket option: IP_TRANSPARENT: %s", err)}
+	}
+
+	if err = syscall.Bind(fileDescriptor, localSocketAddress); err != nil {
+		syscall.Close(fileDescriptor)
+		return nil, &net.OpError{Op: "dial", Err: fmt.Errorf("socket bind: %s", err)}
+	}
+
+	if err = syscall.Connect(fileDescriptor, remoteSocketAddress); err != nil {
+		syscall.Close(fileDescriptor)
+		return nil, &net.OpError{Op: "dial", Err: fmt.Errorf("socket connect: %s", err)}
+	}
+
+	fdFile := os.NewFile(uintptr(fileDescriptor), fmt.Sprintf("net-udp-dial-%s", raddr.String()))
+	defer fdFile.Close()
+
+	remoteConn, err := net.FileConn(fdFile)
+	if err != nil {
+		syscall.Close(fileDescriptor)
+		return nil, &net.OpError{Op: "dial", Err: fmt.Errorf("convert file descriptor to connection: %s", err)}
+	}
+
+	return remoteConn.(*net.UDPConn), nil
+}
+
+// udpAddToSockerAddr will convert a UDPAddr
+// into a Sockaddr that may be used when
+// connecting and binding sockets
+func udpAddrToSocketAddr(addr *net.UDPAddr) (syscall.Sockaddr, error) {
+	switch {
+	case addr.IP.To4() != nil:
+		ip := [4]byte{}
+		copy(ip[:], addr.IP.To4())
+
+		return &syscall.SockaddrInet4{Addr: ip, Port: addr.Port}, nil
+
+	default:
+		ip := [16]byte{}
+		copy(ip[:], addr.IP.To16())
+
+		zoneID, err := strconv.ParseUint(addr.Zone, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+
+		return &syscall.SockaddrInet6{Addr: ip, Port: addr.Port, ZoneId: uint32(zoneID)}, nil
+	}
+}
+
+// udpAddrFamily will attempt to work
+// out the address family based on the
+// network and UDP addresses
+func udpAddrFamily(net string, laddr, raddr *net.UDPAddr) int {
+	switch net[len(net)-1] {
+	case '4':
+		return syscall.AF_INET
+	case '6':
+		return syscall.AF_INET6
+	}
+
+	if (laddr == nil || laddr.IP.To4() != nil) &&
+		(raddr == nil || laddr.IP.To4() != nil) {
+		return syscall.AF_INET
+	}
+	return syscall.AF_INET6
 }

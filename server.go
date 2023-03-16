@@ -2,7 +2,6 @@ package ipt2socks
 
 import (
 	"github.com/0990/ipt2socks/tproxy"
-	"github.com/0990/socks5"
 	"github.com/sirupsen/logrus"
 	"io"
 	"net"
@@ -33,18 +32,15 @@ func NewServer(c Config) (*Server, error) {
 		return nil, err
 	}
 
-	client := socks5.NewSocks5Client(socks5.ClientCfg{
-		ServerAddr: c.ProxyAddr,
-		UserName:   "",
-		Password:   "",
-		UDPTimout:  int(c.UDPTimeout),
-		TCPTimeout: 60,
-	})
+	dialer, err := newProxyDialer(c.Proxy, c.UDPTimeout)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Server{
 		tcpListenAddr: taddr,
 		udpListenAddr: uaddr,
-		proxyDialer:   client,
+		proxyDialer:   dialer,
 		cfg:           c,
 	}, nil
 }

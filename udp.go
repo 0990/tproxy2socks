@@ -14,17 +14,19 @@ const socketBufSize = 64 * 1024
 // send: client->relayer->sender->remote
 // receive: client<-relayer<-sender<-remote
 func runUDPRelayServer(listenAddr *net.UDPAddr, proxyDialer proxyDialer, timeout time.Duration) {
-	relayer, err := tproxy.ListenUDP(listenAddr.String())
+	r, err := tproxy.ListenUDP(listenAddr.String())
 	if err != nil {
 		return
 	}
-	defer relayer.Close()
+	defer r.Close()
+
+	relayer := r.(*net.UDPConn)
 
 	var senders SenderMap
 
 	for {
 		buf := make([]byte, socketBufSize)
-		n, srcAddr, dstAddr, err := tproxy.ReadFromUDP(relayer.(*net.UDPConn), buf)
+		n, srcAddr, dstAddr, err := tproxy.ReadFromUDP(relayer, buf)
 		if err != nil {
 			logrus.WithError(err).Error("tproxy.ReadFromUDP(")
 			continue
@@ -34,7 +36,6 @@ func runUDPRelayServer(listenAddr *net.UDPAddr, proxyDialer proxyDialer, timeout
 		id := srcAddr.String() + "|" + dstAddr.String()
 
 		worker := &UDPWorker{
-			relayer:   relayer,
 			timeout:   timeout,
 			srcAddr:   srcAddr,
 			dstAddr:   dstAddr,
@@ -72,12 +73,12 @@ func (p *SenderMap) LoadOrStore(key string, worker *UDPWorker) (w *UDPWorker, lo
 
 type UDPWorker struct {
 	srcAddr, dstAddr *net.UDPAddr
-	relayer          net.PacketConn
 	timeout          time.Duration
 	onClear          func()
 	writeData        chan []byte
 
-	sender net.Conn
+	sender       net.Conn
+	clientWriter net.Conn
 }
 
 func (w *UDPWorker) Run(dialer proxyDialer) {
@@ -98,17 +99,26 @@ func (w *UDPWorker) run(dialer proxyDialer) error {
 
 	w.sender = sender
 
+	clientWriter, err := tproxy.DialUDP("udp", w.dstAddr, w.srcAddr)
+	if err != nil {
+		return err
+	}
+	w.clientWriter = clientWriter
+
 	log := logrus.WithFields(logrus.Fields{
-		"srcAddr": w.srcAddr.String(),
-		"dstAddr": w.dstAddr.String(),
+		"src": w.srcAddr.String(),
+		"dst": w.dstAddr.String(),
 	})
 
 	go func() {
 		defer w.Close()
 
-		err := relayToClient(sender, w.relayer, w.srcAddr, w.timeout)
+		now := time.Now()
+		err := relayToClient(sender, clientWriter, w.timeout)
 		if err != nil {
-			log.WithError(err).Error("relayToClient")
+			if !isNetTimeoutErr(err) {
+				log.WithField("elapseSec", time.Since(now).Seconds()).WithError(err).Error("relayToClient")
+			}
 		}
 	}()
 
@@ -129,7 +139,13 @@ func (w *UDPWorker) run(dialer proxyDialer) error {
 
 func (w *UDPWorker) Close() {
 	w.onClear()
-	w.sender.Close()
+	if w.sender != nil {
+		w.sender.Close()
+	}
+
+	if w.clientWriter != nil {
+		w.clientWriter.Close()
+	}
 }
 
 func (w *UDPWorker) Write(data []byte) {
@@ -147,7 +163,7 @@ func (w *UDPWorker) write(data []byte) error {
 	return nil
 }
 
-func relayToClient(receiver net.Conn, relayer net.PacketConn, clientAddr net.Addr, timeout time.Duration) error {
+func relayToClient(receiver net.Conn, writer *net.UDPConn, timeout time.Duration) error {
 	buf := make([]byte, socketBufSize)
 	for {
 		receiver.SetReadDeadline(time.Now().Add(timeout))
@@ -156,7 +172,7 @@ func relayToClient(receiver net.Conn, relayer net.PacketConn, clientAddr net.Add
 			return err
 		}
 
-		_, err = relayer.WriteTo(buf[0:n], clientAddr)
+		_, err = writer.Write(buf[0:n])
 		if err != nil {
 			return err
 		}

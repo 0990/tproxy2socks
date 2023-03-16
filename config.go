@@ -1,7 +1,7 @@
 package ipt2socks
 
 type Config struct {
-	ProxyAddr  string
+	Proxy      string
 	ListenAddr string
 	UDPTimeout int32
 }
