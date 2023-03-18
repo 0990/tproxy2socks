@@ -1,9 +1,9 @@
 package ipt2socks
 
 import (
+	"fmt"
 	"github.com/0990/ipt2socks/tproxy"
 	"github.com/sirupsen/logrus"
-	"io"
 	"net"
 	"sync"
 	"time"
@@ -101,18 +101,18 @@ func (s *Server) connHandler(conn net.Conn) {
 
 	proxyConn, err := s.proxyDialer.Dial("tcp", dst.String())
 	if err != nil {
-		log.WithError(err).Error("sock5 dial fail")
+		log.WithError(err).Info("sock5 dial fail")
 		return
 	}
 	defer proxyConn.Close()
 
-	log.Debug("proxy success")
+	//log.Debug("proxy success")
 
 	var streamWait sync.WaitGroup
 	streamWait.Add(2)
 
-	streamConn := func(dst io.Writer, src io.Reader) {
-		io.Copy(dst, src)
+	streamConn := func(dst net.Conn, src net.Conn) {
+		copyWithTimeout(dst, src, time.Second*60)
 		streamWait.Done()
 	}
 
@@ -120,4 +120,25 @@ func (s *Server) connHandler(conn net.Conn) {
 	go streamConn(conn, proxyConn)
 
 	streamWait.Wait()
+}
+
+func copyWithTimeout(dst net.Conn, src net.Conn, timeout time.Duration) error {
+	b := make([]byte, socketBufSize)
+	for {
+		if timeout != 0 {
+			src.SetReadDeadline(time.Now().Add(timeout))
+		}
+		n, err := src.Read(b)
+		if err != nil {
+			return fmt.Errorf("copy read:%w", err)
+		}
+		wn, err := dst.Write(b[0:n])
+		if err != nil {
+			return fmt.Errorf("copy write:%w", err)
+		}
+		if wn != n {
+			return fmt.Errorf("copy write not full")
+		}
+	}
+	return nil
 }

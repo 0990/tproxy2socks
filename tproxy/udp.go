@@ -5,14 +5,44 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
 	"net"
 	"os"
 	"strconv"
 	"syscall"
 	"unsafe"
 )
+
+//func ListenUDP(network string, laddr *net.UDPAddr) (net.PacketConn, error) {
+//	listener, err := net.ListenUDP(network, laddr)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	fileDescriptorSource, err := listener.File()
+//	if err != nil {
+//		return nil, &net.OpError{Op: "listen", Net: network, Source: nil, Addr: laddr, Err: fmt.Errorf("get file descriptor: %s", err)}
+//	}
+//	defer fileDescriptorSource.Close()
+//
+//	fileDescriptor := int(fileDescriptorSource.Fd())
+//	if err = syscall.SetsockoptInt(fileDescriptor, syscall.SOL_IP, syscall.IP_TRANSPARENT, 1); err != nil {
+//		return nil, &net.OpError{Op: "listen", Net: network, Source: nil, Addr: laddr, Err: fmt.Errorf("set socket option: IP_TRANSPARENT: %s", err)}
+//	}
+//
+//	if err = syscall.SetsockoptInt(fileDescriptor, syscall.SOL_IP, syscall.IP_RECVORIGDSTADDR, 1); err != nil {
+//		return nil, &net.OpError{Op: "listen", Net: network, Source: nil, Addr: laddr, Err: fmt.Errorf("set socket option: IP_RECVORIGDSTADDR: %s", err)}
+//	}
+//
+//	//if err = syscall.SetsockoptInt(fileDescriptor, syscall.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
+//	//	return nil, &net.OpError{Op: "listen", Net: network, Source: nil, Addr: laddr, Err: fmt.Errorf("set socket option: IP_RECVORIGDSTADDR: %s", err)}
+//	//}
+//
+//	//if err = syscall.SetsockoptInt(fileDescriptor, syscall.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
+//	//	return nil, &net.OpError{Op: "listen", Net: network, Source: nil, Addr: laddr, Err: fmt.Errorf("set socket option: IP_RECVORIGDSTADDR: %s", err)}
+//	//}
+//
+//	return listener, nil
+//}
 
 func ListenUDP(addr string) (net.PacketConn, error) {
 	var lc net.ListenConfig
@@ -40,21 +70,6 @@ func ReadFromUDP(conn *net.UDPConn, b []byte) (int, *net.UDPAddr, *net.UDPAddr, 
 		return 0, nil, nil, fmt.Errorf("parsing socket control message: %s", err)
 	}
 	return n, addr, origDst, nil
-}
-
-func parseOrigFromOOB(oob []byte) net.IP {
-	// Start with IPv6 and then fallback to IPv4
-	// TODO(fastest963): Figure out a way to prefer one or the other. Looking at
-	// the lvl of the header for a 0 or 41 isn't cross-platform.
-	cm6 := new(ipv6.ControlMessage)
-	if cm6.Parse(oob) == nil && cm6.Dst != nil {
-		return cm6.Src
-	}
-	cm4 := new(ipv4.ControlMessage)
-	if cm4.Parse(oob) == nil && cm4.Dst != nil {
-		return cm4.Src
-	}
-	return nil
 }
 
 func readOrigAddrFromOOB(oob []byte) (*net.UDPAddr, error) {
@@ -97,26 +112,6 @@ func readOrigAddrFromOOB(oob []byte) (*net.UDPAddr, error) {
 		return nil, fmt.Errorf("unable to obtain original destination: %s", err)
 	}
 	return origAddr, nil
-}
-
-func CorrectSource(src net.IP) []byte {
-	//dst := parseDstFromOOB(oob)
-	//if dst == nil {
-	//	return nil
-	//}
-	// If the dst is definitely an IPv6, then use ipv6's ControlMessage to
-	// respond otherwise use ipv4's because ipv6's marshal ignores ipv4
-	// addresses.
-	if src.To4() == nil {
-		cm := new(ipv6.ControlMessage)
-		cm.Src = src
-		return cm.Marshal()
-	} else {
-		cm := new(ipv4.ControlMessage)
-		cm.Src = src
-		return cm.Marshal()
-	}
-	//return oob
 }
 
 func DialUDP(network string, laddr *net.UDPAddr, raddr *net.UDPAddr) (*net.UDPConn, error) {
