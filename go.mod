@@ -1,4 +1,4 @@
-module github.com/0990/ipt2socks
+module github.com/0990/tproxy2socks
 
 go 1.19
 

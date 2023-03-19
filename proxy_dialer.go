@@ -1,4 +1,4 @@
-package ipt2socks
+package tproxy2socks
 
 import (
 	"errors"

@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/0990/ipt2socks"
+	"github.com/0990/tproxy2socks"
 	"github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
@@ -23,7 +23,7 @@ func main() {
 		logrus.SetLevel(logrus.WarnLevel)
 	}
 
-	server, err := ipt2socks.NewServer(ipt2socks.Config{
+	server, err := tproxy2socks.NewServer(tproxy2socks.Config{
 		Proxy:      *proxy,
 		ListenAddr: *listen,
 		UDPTimeout: int32(*udpTimeout),

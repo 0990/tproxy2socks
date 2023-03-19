@@ -1,8 +1,8 @@
-package ipt2socks
+package tproxy2socks
 
 import (
 	"fmt"
-	"github.com/0990/ipt2socks/tproxy"
+	"github.com/0990/tproxy2socks/tproxy"
 	"github.com/sirupsen/logrus"
 	"net"
 	"sync"
