@@ -12,16 +12,17 @@ import (
 var proxy = flag.String("proxy", "socks5://127.0.0.1:1080", "Use this proxy [protocol://]host[:port]")
 var listen = flag.String("listen", "0.0.0.0:60080", "listen addr")
 var udpTimeout = flag.Int("udptimeout", 60, "udp timeout second")
-var verbose = flag.Bool("verbose", false, "print verbose log, affect performance")
+var logLevel = flag.String("loglevel", "error", "log level,debug,info,warn,error")
 
 func main() {
 	flag.Parse()
 
-	if *verbose {
-		logrus.SetLevel(logrus.DebugLevel)
-	} else {
-		logrus.SetLevel(logrus.WarnLevel)
+	level, err := logrus.ParseLevel(*logLevel)
+	if err != nil {
+		logrus.Fatalln(fmt.Errorf("loglevel not valid:%w", level))
 	}
+
+	logrus.SetLevel(level)
 
 	server, err := tproxy2socks.NewServer(tproxy2socks.Config{
 		Proxy:      *proxy,
